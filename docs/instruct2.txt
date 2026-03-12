@@ -1,0 +1,464 @@
+ Swiss Pairing System – Internal Function Documentation
+
+> Purpose of this document
+>
+> This document explains what each function does, why it exists, and where it is called from.
+
+
+ 🔑 Naming Conventions Used Here
+
+ Controller → entry-point function (API / button trigger)
+ Engine → core business logic
+ Helper → small reusable utility
+ DB Helper → read/write database
+
+
+
+ 1️.Controller-Level Functions
+
+These functions are usually called by API routes or UI actions.
+
+
+
+ generate_next_round(tournament_id)
+
+ Type
+
+Controller
+
+ What it does
+
+ Generates the next tournament round
+ Ensures the previous round is complete
+ Stops if maximum rounds reached
+ Calls Swiss pairing engine
+ Saves round data to DB
+
+ Step-by-step
+
+1. Load participants
+2. Get current round number
+3. Validate previous round results
+4. Increment round number
+5. Call `swiss_pairings_participants()`
+6. Save pairings and byes
+
+ Calls
+
+ `get_current_round_number()`
+ `get_round_data()`
+ `swiss_pairings_participants()`
+ `save_round_pairings()`
+
+ Called by
+
+ API endpoint (Generate Next Round button)
+
+
+
+ save_round_results(tournament_id, round_number, form_data)
+
+ Type
+
+Controller
+
+ What it does
+
+ Saves match results for a round
+ Updates player scores
+ Handles result edits safely
+ Updates bye players
+
+ Important behavior
+
+ Prevents double scoring
+ Reverts old score if result changes
+
+ Calls
+
+ `get_round_data()`
+ `save_round_pairings()`
+
+ Called by
+
+ API endpoint (Save Results button)
+
+
+
+ 2️. Core Engine (Swiss Pairing Logic)
+
+
+
+ swiss_pairings_participants(participants, round_number)
+
+ Type
+
+Core Engine
+
+ What it does
+
+This is the brain of the system.
+
+It:
+
+ Decides byes
+ Creates pairings
+ Assigns colors
+ Updates player history
+ Commits data to DB
+
+ High-level flow
+
+ Initialize player state
+ Handle round 1 separately
+ Handle rounds ≥ 2 using score brackets
+ Finalize colors and opponents
+
+ Calls
+
+ `select_bye_player()`
+ `swiss_pairings_round_1()`
+ `pair_bracket_with_color_priority()`
+ `assign_colors()`
+ `serialize_participant_data()`
+
+ Called by
+
+ `generate_next_round()`
+
+
+
+ 3️. Color Preference & Validation Helpers
+
+
+
+ get_color_preference(player, round_number)
+
+ Type
+
+Business Rule Helper
+
+ What it does
+
+Determines what color a player prefers:
+
+ absolute (must)
+ strong (should)
+ mild (nice)
+
+Based on:
+
+ Color imbalance
+ Last colors
+ Round parity
+
+ Returns
+
+```js
+{ type, color, games_played, mild_adjustable }
+```
+
+ Called by
+
+ `would_violate_color_rules()`
+ `can_pair()`
+ `calculate_pairing_quality()`
+ `assign_colors()`
+
+
+
+ would_violate_color_rules(player, assigned_color)
+
+ Type
+
+Validation Helper
+
+ What it does
+
+Checks if assigning a color:
+
+ Causes 3 same colors in a row
+ Breaks absolute color preference
+
+ Returns
+
+ true → invalid
+ false → valid
+
+ Called by
+
+ `can_pair()`
+ `assign_colors()`
+ `calculate_pairing_quality()`
+
+
+
+ assign_colors(p1, p2, round_number)
+
+ Type
+
+Business Rule Helper
+
+ What it does
+
+Assigns White / Black using priority:
+
+1. Absolute preference
+2. Strong preference
+3. Mild preference
+4. Higher-ranked player
+5. Minimize imbalance
+
+ Returns
+
+```python
+(white_player, black_player)
+```
+
+ Called by
+
+ Round 1 pairing logic
+ Final pairing loop in Swiss engine
+
+
+
+ 4️. Pairing Legality & Quality Helpers
+
+
+
+ can_pair(p1, p2)
+
+ Type
+
+Validation Helper
+
+ What it does
+
+Checks whether two players can be paired:
+
+ Not previous opponents
+ At least one legal color assignment exists
+
+ Called by
+
+ `pair_bracket_with_color_priority()`
+
+
+
+ calculate_pairing_quality(p1, p2)
+
+ Type
+
+Heuristic Helper
+
+ What it does
+
+Calculates numeric score for pairing quality.
+Lower = better.
+
+Factors:
+
+ Score difference (highest weight)
+ Color preference conflicts
+ Float direction penalties
+
+ Called by
+
+ `pair_bracket_with_color_priority()`
+
+
+
+ 5️. Bracket & Swiss Helpers
+
+
+
+ pair_bracket_with_color_priority(players)
+
+ Type
+
+Swiss Engine Helper
+
+ What it does
+
+Pairs players inside a score bracket.
+
+Steps:
+
+1. Try top-half vs bottom-half
+2. Score pairing quality
+3. Pick best legal pairs
+4. Return leftovers as floaters
+
+ Returns
+
+```python
+(pairs, floaters)
+```
+
+ Called by
+
+ `swiss_pairings_participants()`
+
+
+
+ swiss_pairings_round_1(participants)
+
+ Type
+
+Special Case Helper
+
+ What it does
+
+Round 1 only:
+
+ Sort by ELO
+ Pair sequentially
+
+ Called by
+
+ `swiss_pairings_participants()` (round 1 only)
+
+
+
+ 6️. Bye Handling
+
+
+
+ select_bye_player(players)
+
+ Type
+
+Tournament Rule Helper
+
+ What it does
+
+Selects bye recipient based on:
+
+ Lowest score
+ Fewest byes so far
+ Tie-break by highest ID
+
+ Called by
+
+ `swiss_pairings_participants()`
+
+
+
+ 7️. Data Serialization Helpers
+
+
+
+ serialize_participant_data(participants)
+
+ Type
+
+Persistence Helper
+
+ What it does
+
+Converts list attributes into JSON strings
+before database save.
+
+ Called by
+
+ `swiss_pairings_participants()`
+
+
+
+ ensure_list(attr)
+
+ Type
+
+Utility Helper
+
+ What it does
+
+Ensures data is a list before mutation.
+
+ Called by
+
+ Multiple places before `.append()`
+
+
+
+ 8️. Round & Tournament Data Helpers
+
+
+
+ get_current_round_number(tournament_id)
+
+ Type
+
+DB Read Helper
+
+ What it does
+
+Returns last completed round number.
+
+ Called by
+
+ `generate_next_round()`
+ `load_rounds()`
+
+
+
+ get_round_data(tournament_id, round_number)
+
+ Type
+
+DB Read Helper
+
+ What it does
+
+Loads:
+
+ Pairings
+ Bye players
+ Results
+
+ Called by
+
+ `generate_next_round()`
+ `save_round_results()`
+ `load_rounds()`
+
+
+
+ save_round_pairings(tournament_id, round_number, pairings, bye_players)
+
+ Type
+
+DB Write Helper
+
+ What it does
+
+Saves pairings and bye players as JSON.
+
+ Called by
+
+ `generate_next_round()`
+ `save_round_results()`
+
+
+
+ load_rounds(tournament_id)
+
+ Type
+
+Query Helper
+
+ What it does
+
+Loads all rounds for UI display.
+
+ Called by
+
+ API (round history view)
+
+
+
+ Summary
+
+1. Start with `generate_next_round()`
+2. Then read `swiss_pairings_participants()`
+3. Understand `assign_colors()` and `get_color_preference()`
